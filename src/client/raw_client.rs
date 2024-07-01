@@ -1,4 +1,4 @@
-use embedded_io_async::{Read, Write};
+use embedded_io_async::{Read, ReadReady, Write};
 use heapless::Vec;
 use rand_core::RngCore;
 
@@ -38,7 +38,7 @@ pub enum Event<'a> {
 
 pub struct RawMqttClient<'a, T, const MAX_PROPERTIES: usize, R: RngCore>
 where
-    T: Read + Write,
+    T: Read + Write + ReadReady,
 {
     connection: Option<NetworkConnection<T>>,
     buffer: &'a mut [u8],
@@ -50,7 +50,7 @@ where
 
 impl<'a, T, const MAX_PROPERTIES: usize, R> RawMqttClient<'a, T, MAX_PROPERTIES, R>
 where
-    T: Read + Write,
+    T: Read + Write + ReadReady,
     R: RngCore,
 {
     pub fn new(
@@ -102,7 +102,7 @@ where
             return Err(ReasonCode::BuffError);
         }
         let conn = self.connection.as_mut().unwrap();
-        trace!("Sending connect");
+        info!("Sending connect");
         conn.send(&self.buffer[0..len.unwrap()]).await?;
 
         Ok(())
@@ -124,7 +124,7 @@ where
             return Err(ReasonCode::NetworkError);
         }
         let conn = self.connection.as_mut().unwrap();
-        trace!("Creating disconnect packet!");
+        info!("Creating disconnect packet!");
         let mut disconnect = DisconnectPacket::<'b, MAX_PROPERTIES>::new();
         let len = disconnect.encode(self.buffer, self.buffer_len);
         if let Err(err) = len {
@@ -180,7 +180,7 @@ where
             error!("[DECODE ERR]: {}", err);
             return Err(ReasonCode::BuffError);
         }
-        trace!("Sending message");
+        info!("Sending message");
         conn.send(&self.buffer[0..len.unwrap()]).await?;
 
         Ok(identifier)
@@ -313,6 +313,29 @@ where
         }
     }
 
+    pub async fn poll_if_ready<'b, const MAX_TOPICS: usize>(
+        &'b mut self,
+    ) -> Result<Option<Event<'b>>, ReasonCode> {
+        info!("poll_if_ready: start");
+
+        if self.connection.is_none() {
+            info!("poll_if_ready: no connection, network error");
+            return Err(ReasonCode::NetworkError);
+        }
+
+        let conn = self.connection.as_mut().unwrap();
+        info!("poll_if_ready: got connection, about to call receive_ready()");
+
+        // If there's no data, just return None
+        if !conn.receive_ready()? {
+            info!("poll_if_ready: No data ready");
+            Ok(None)
+        } else {
+            info!("poll_if_ready: Data is ready, calling poll()");
+            self.poll::<MAX_TOPICS>().await.map(Some)
+        }
+    }
+
     pub async fn poll<'b, const MAX_TOPICS: usize>(&'b mut self) -> Result<Event<'b>, ReasonCode> {
         if self.connection.is_none() {
             return Err(ReasonCode::NetworkError);
@@ -320,9 +343,11 @@ where
 
         let conn = self.connection.as_mut().unwrap();
 
-        trace!("Waiting for a packet");
+        info!("poll: About to receive_packet()");
 
         let read = { receive_packet(self.buffer, self.buffer_len, self.recv_buffer, conn).await? };
+
+        info!("poll: Got a packet, size {}", read);
 
         let buf_reader = BuffReader::new(self.buffer, read);
 
@@ -473,7 +498,7 @@ where
 }
 
 #[cfg(not(feature = "tls"))]
-async fn receive_packet<'c, T: Read + Write>(
+async fn receive_packet<'c, T: Read + Write + ReadReady>(
     buffer: &mut [u8],
     buffer_len: usize,
     recv_buffer: &mut [u8],
@@ -487,20 +512,20 @@ async fn receive_packet<'c, T: Read + Write>(
     let mut i = 0;
 
     // Get len of packet
-    trace!("Reading lenght of packet");
+    info!("receive_packet(): Reading length of packet");
     loop {
-        trace!("    Reading in loop!");
+        info!("receive_packet():     Reading byte of length");
         let len: usize = conn
             .receive(&mut recv_buffer[writer.position..(writer.position + 1)])
             .await?;
-        trace!("    Received data!");
+        info!("receive_packet():     Received byte of length");
         if len == 0 {
-            trace!("Zero byte len packet received, dropping connection.");
+            info!("receive_packet(): Zero byte len packet received, dropping connection.");
             return Err(ReasonCode::NetworkError);
         }
         i += len;
         if let Err(_e) = writer.insert_ref(len, &recv_buffer[writer.position..i]) {
-            error!("Error occurred during write to buffer!");
+            error!("receive_packet(): Error occurred during write to buffer!");
             return Err(ReasonCode::BuffError);
         }
         if i > 1 {
@@ -509,25 +534,28 @@ async fn receive_packet<'c, T: Read + Write>(
                 break;
             }
             if i >= 5 {
-                error!("Could not read len of packet!");
+                error!("receive_packet(): Could not read len of packet!");
                 return Err(ReasonCode::NetworkError);
             }
         }
     }
-    trace!("Lenght done!");
+    info!("receive_packet(): Length done!");
     let rem_len_len = i;
     i = 0;
     if let Ok(l) = VariableByteIntegerDecoder::decode(rem_len.unwrap()) {
-        trace!("Reading packet with target len {}", l);
+        info!("receive_packet(): Reading packet with target len {}", l);
         target_len = l as usize;
     } else {
-        error!("Could not decode len of packet!");
+        error!("receive_packet(): Could not decode len of packet!");
         return Err(ReasonCode::BuffError);
     }
 
     loop {
         if writer.position == target_len + rem_len_len {
-            trace!("Received packet with len: {}", (target_len + rem_len_len));
+            info!(
+                "receive_packet(): Received packet with len: {}",
+                (target_len + rem_len_len)
+            );
             return Ok(target_len + rem_len_len);
         }
         let len: usize = conn
@@ -537,7 +565,7 @@ async fn receive_packet<'c, T: Read + Write>(
         if let Err(_e) =
             writer.insert_ref(len, &recv_buffer[writer.position..(writer.position + i)])
         {
-            error!("Error occurred during write to buffer!");
+            error!("receive_packet(): Error occurred during write to buffer!");
             return Err(ReasonCode::BuffError);
         }
     }
@@ -550,7 +578,7 @@ async fn receive_packet<'c, T: Read + Write>(
     recv_buffer: &mut [u8],
     conn: &'c mut NetworkConnection<T>,
 ) -> Result<usize, ReasonCode> {
-    trace!("Reading packet");
+    info!("Reading packet");
     let mut writer = BuffWriter::new(buffer, buffer_len);
     let len = conn.receive(recv_buffer).await?;
     if let Err(_e) = writer.insert_ref(len, &recv_buffer[writer.position..(writer.position + len)])

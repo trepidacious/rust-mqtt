@@ -23,11 +23,11 @@
  */
 
 use crate::packet::v5::reason_codes::ReasonCode;
-use embedded_io_async::{Read, Write};
+use embedded_io_async::{Read, ReadReady, Write};
 
 pub struct NetworkConnection<T>
 where
-    T: Read + Write,
+    T: Read + Write + ReadReady,
 {
     io: T,
 }
@@ -35,7 +35,7 @@ where
 /// Network connection represents an established TCP connection.
 impl<T> NetworkConnection<T>
 where
-    T: Read + Write,
+    T: Read + Write + ReadReady,
 {
     /// Create a new network handle using the provided IO implementation.
     pub fn new(io: T) -> Self {
@@ -44,6 +44,7 @@ where
 
     /// Send the data from `buffer` via TCP connection.
     pub async fn send(&mut self, buffer: &[u8]) -> Result<(), ReasonCode> {
+        info!("NetworkConnection.send(), buffer len {}", buffer.len());
         let _ = self
             .io
             .write(buffer)
@@ -54,9 +55,16 @@ where
 
     /// Receive data to the `buffer` from TCP connection.
     pub async fn receive(&mut self, buffer: &mut [u8]) -> Result<usize, ReasonCode> {
+        info!("NetworkConnection.receive(), buffer len {}", buffer.len());
         self.io
             .read(buffer)
             .await
             .map_err(|_| ReasonCode::NetworkError)
+    }
+
+    /// Check whether the TCP connection is ready to provide any data
+    pub fn receive_ready(&mut self) -> Result<bool, ReasonCode> {
+        info!("NetworkConnection.receive_ready: About to read_ready()");
+        self.io.read_ready().map_err(|_| ReasonCode::NetworkError)
     }
 }

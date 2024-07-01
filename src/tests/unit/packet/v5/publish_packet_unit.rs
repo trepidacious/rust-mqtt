@@ -77,7 +77,7 @@ fn test_decode() {
     assert_eq!(packet.topic_name.string, "test");
     assert_eq!(packet.packet_identifier, 23432);
     assert_eq!(packet.property_len, 7);
-    let prop = packet.properties.get(0);
+    let prop = packet.properties.first();
     assert!(prop.is_some());
     assert_eq!(<&Property as Into<u8>>::into(prop.unwrap()), 0x01);
     if let Property::PayloadFormat(u) = (*prop.unwrap()).clone() {

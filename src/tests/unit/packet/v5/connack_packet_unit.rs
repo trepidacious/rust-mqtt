@@ -57,7 +57,7 @@ fn test_encode() {
 
 #[test]
 fn test_decode() {
-    let mut buffer: [u8; 8] = [
+    let buffer: [u8; 8] = [
         0x20,
         0x06,
         0x45,
@@ -78,7 +78,7 @@ fn test_decode() {
         ReasonCode::ServerMoved.into()
     );
     assert_eq!(connack_res.property_len, 3);
-    let prop = connack_res.properties.get(0).unwrap();
+    let prop = connack_res.properties.first().unwrap();
     assert_eq!(<&Property as Into<u8>>::into(prop), 0x21);
     if let Property::ReceiveMaximum(u) = *prop {
         assert_eq!(u, 21);

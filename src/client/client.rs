@@ -22,7 +22,7 @@
  * SOFTWARE.
  */
 
-use embedded_io_async::{Read, Write};
+use embedded_io_async::{Read, ReadReady, Write};
 use heapless::Vec;
 use rand_core::RngCore;
 
@@ -34,14 +34,14 @@ use super::raw_client::{Event, RawMqttClient};
 
 pub struct MqttClient<'a, T, const MAX_PROPERTIES: usize, R: RngCore>
 where
-    T: Read + Write,
+    T: Read + Write + ReadReady,
 {
     raw: RawMqttClient<'a, T, MAX_PROPERTIES, R>,
 }
 
 impl<'a, T, const MAX_PROPERTIES: usize, R> MqttClient<'a, T, MAX_PROPERTIES, R>
 where
-    T: Read + Write,
+    T: Read + Write + ReadReady,
     R: RngCore,
 {
     pub fn new(
@@ -191,6 +191,22 @@ where
                 }
             }
             Event::Disconnect(reason) => Err(reason),
+            // If an application message comes at this moment, it is lost.
+            _ => Err(ReasonCode::ImplementationSpecificError),
+        }
+    }
+
+    /// Receive a message if one is ready. The work of this method strictly depends on the
+    /// network implementation passed in the `ClientConfig`. It expects the PUBLISH packet
+    /// from the broker.
+    pub async fn receive_message_if_ready<'b>(
+        &'b mut self,
+    ) -> Result<Option<(&'b str, &'b [u8])>, ReasonCode> {
+        info!("receive_message_if_ready: About to poll_if_ready()");
+        match self.raw.poll_if_ready::<0>().await? {
+            None => Ok(None),
+            Some(Event::Message(topic, payload)) => Ok(Some((topic, payload))),
+            Some(Event::Disconnect(reason)) => Err(reason),
             // If an application message comes at this moment, it is lost.
             _ => Err(ReasonCode::ImplementationSpecificError),
         }
